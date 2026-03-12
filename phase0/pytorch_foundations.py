@@ -40,6 +40,10 @@ print(t.ndim)            # 3
 print(t.numel())         # 24 (total number of elements)
 
 t2 = t.view(6, 4)        # reshape — must be contiguous in memory
+
+# Question:what happens if t5 = t.view(8,3)? What's the rule here 
+
+
 t3 = t.reshape(6, 4)     # reshape — works even if not contiguous (may copy)
 t4 = t.view(2, -1)       # -1 means "infer this dimension" → shape (2, 12)
 
@@ -145,6 +149,17 @@ b.squeeze(0).shape           # (3, 1) — remove only dim 0
 # the loss), call loss.backward(), and PyTorch fills in .grad for every
 # parameter. You never write backprop by hand.
 
+
+# Question
+# Explain more about this gradient tracking, what happens if 
+# x = torch.tensor(3.0, requires_grad=True)
+# y = x ** 2 + 2 * x + 1  
+# z = x**3 + 1
+# y.backward()  
+# z.backward()
+# print(x.grad)    
+# end of question
+
 x = torch.tensor(3.0, requires_grad=True)  # "track this variable"
 y = x ** 2 + 2 * x + 1                     # y = x² + 2x + 1
 y.backward()                                # compute dy/dx
@@ -158,6 +173,10 @@ loss = y.sum()                               # scalar
 loss.backward()
 print(W.grad.shape)                          # (3, 4) — same shape as W
 
+# Question
+# Does it make sense if loss is a tensor, and we do loss.backward()? If so, what's the convention here? 
+# end of question 
+
 # --- Detaching from the graph ---
 # Sometimes you want to use a tensor's value without tracking gradients.
 z = y.detach()             # z has same values but no grad tracking
@@ -165,6 +184,8 @@ z = y.detach()             # z has same values but no grad tracking
 with torch.no_grad():
     z = x @ W              # no gradients computed — faster, less memory
     # Used during inference / evaluation
+
+# Question: once detached, what happens to previous tracking? Is there any situation where we detach and need to re-attach? 
 
 
 # ============================================================================
@@ -224,12 +245,16 @@ ln = nn.LayerNorm(64)
 x = torch.randn(2, 10, 64)
 y = ln(x)                    # (2, 10, 64) — each 64-dim vector is normalized
 
+#Question: why do we need to specify a 64 in nn.LayerNorm(64) if the goal is to normalize the last dimension of x = torch.randn(2, 10, 64)? Can we do nn.LayerNorm(128) instead? 
+
 # --- nn.Dropout(p) ---
 # During training, randomly zeroes elements with probability p.
 # Prevents overfitting. Disabled during eval (model.eval()).
 drop = nn.Dropout(0.1)
 x = torch.randn(2, 10, 64)
-y = drop(x)                  # ~10% of values are 0, rest scaled up by 1/(1-p)
+y = drop(x)                  # ~10% of values are 0, rest scaled up by 1/(1-p
+
+# Question: explain why 1/(1-p) here, maybe explain from a 'keep some quantity unbiased' kind of way?
 
 # --- nn.GELU() ---
 # Activation function used in GPT (smoother than ReLU).
@@ -280,6 +305,9 @@ for epoch in range(10):
 
         logits = model(input_ids)
         loss = F.cross_entropy(logits.view(-1, 100), targets.view(-1))
+
+        #Question
+        # explain how does loss = F.cross_entropy(logits.view(-1, 100), targets.view(-1)) work exactly, is there any broadcasting here? 
 
         loss.backward()
         # Gradient clipping — prevents exploding gradients
@@ -407,6 +435,8 @@ dots = torch.einsum('ij,ij->i', a, b)    # (3,) — row-wise dot products
 #    loss.item() gives you a plain Python float. Don't store the tensor
 #    itself — it keeps the computation graph alive and leaks memory.
 
+# Question: what does it mean keeps the computation graph alive exactly
+
 # 4. model.train() vs model.eval()
 #    Dropout and batch norm behave differently during training vs eval.
 #    Always call model.eval() before inference, model.train() before training.
@@ -419,19 +449,21 @@ dots = torch.einsum('ij,ij->i', a, b)    # (3,) — row-wise dot products
 #    F.cross_entropy expects (N, C) logits and (N,) targets.
 #    For language modeling: logits.view(-1, vocab_size), targets.view(-1)
 
+# Question: explain this part a bit more 
+
 
 # ============================================================================
 # EXERCISE: Verify your understanding
 # ============================================================================
 # Before moving on, make sure you can answer these without looking above:
 #
-# 1. What's the difference between view() and reshape()?
-# 2. What does requires_grad=True do?
-# 3. Why do we call optimizer.zero_grad()?
-# 4. What does torch.tril() produce and why does GPT need it?
-# 5. What's the training loop order? (forward → ? → ? → ? → ?)
-# 6. What does nn.Embedding actually do under the hood?
-# 7. Why do we use .item() when logging the loss?
-# 8. What happens if your model is on GPU but your input tensor is on CPU?
+# 1. What's the difference between view() and reshape()? view() does not make copy, and requires contiguous memory. 
+# 2. What does requires_grad=True do?  track the gradient of this tensor 
+# 3. Why do we call optimizer.zero_grad()? clear previous computed gradient so we can train next batch 
+# 4. What does torch.tril() produce and why does GPT need it?  so that each token only attend itself or previous tokens 
+# 5. What's the training loop order? (forward → ? → ? → ? → ?)  forward -> loss -> gradient -> update 
+# 6. What does nn.Embedding actually do under the hood? use the key (a tensor) to hash the embedding tensor
+# 7. Why do we use .item() when logging the loss? otherwise the computation graph will be alive, and will be memory leakage 
+# 8. What happens if your model is on GPU but your input tensor is on CPU? it will crash 
 #
 # When you're ready, tell me and I'll quiz you.
