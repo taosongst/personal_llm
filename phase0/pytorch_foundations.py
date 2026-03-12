@@ -41,8 +41,15 @@ print(t.numel())         # 24 (total number of elements)
 
 t2 = t.view(6, 4)        # reshape — must be contiguous in memory
 
-# Question:what happens if t5 = t.view(8,3)? What's the rule here 
+# Question:what happens if t5 = t.view(8,3)? What's the rule here
 
+# Answer: t.view(8, 3) works fine — it gives you a (8, 3) tensor. The rule is
+# that the total number of elements must stay the same. t has shape (2, 3, 4),
+# so 2*3*4 = 24 elements. Any new shape whose dimensions multiply to 24 is
+# valid: (8, 3), (6, 4), (24,), (1, 24), (2, 12), etc. If you tried
+# t.view(8, 4) = 32 elements, that would crash with a RuntimeError because
+# 32 ≠ 24. Think of view/reshape as just reinterpreting the same flat block of
+# 24 numbers with different row/column boundaries.
 
 t3 = t.reshape(6, 4)     # reshape — works even if not contiguous (may copy)
 t4 = t.view(2, -1)       # -1 means "infer this dimension" → shape (2, 12)
@@ -151,14 +158,31 @@ b.squeeze(0).shape           # (3, 1) — remove only dim 0
 
 
 # Question
-# Explain more about this gradient tracking, what happens if 
+# Explain more about this gradient tracking, what happens if
 # x = torch.tensor(3.0, requires_grad=True)
-# y = x ** 2 + 2 * x + 1  
+# y = x ** 2 + 2 * x + 1
 # z = x**3 + 1
-# y.backward()  
+# y.backward()
 # z.backward()
-# print(x.grad)    
+# print(x.grad)
 # end of question
+
+# Answer: Gradients ACCUMULATE in .grad by default. Here's what happens step by step:
+#   1. x = 3.0, x.grad = None
+#   2. y = x² + 2x + 1 → dy/dx = 2x + 2 = 8
+#   3. z = x³ + 1      → dz/dx = 3x² = 27
+#   4. y.backward()     → x.grad = 8  (dy/dx)
+#   5. z.backward()     → x.grad = 8 + 27 = 35  (accumulated! not replaced!)
+#   6. print(x.grad)    → tensor(35.)
+#
+# This is why zero_grad() matters — without it, gradients from different
+# backward() calls pile up. In training, each batch's gradients would add
+# to the previous batch's, giving you nonsense updates.
+#
+# Note: z.backward() only works here because both y and z were built from x
+# using separate computation graphs. If you tried y.backward() twice, it would
+# crash because PyTorch frees the graph after the first backward() by default
+# (unless you pass retain_graph=True).
 
 x = torch.tensor(3.0, requires_grad=True)  # "track this variable"
 y = x ** 2 + 2 * x + 1                     # y = x² + 2x + 1
@@ -174,8 +198,22 @@ loss.backward()
 print(W.grad.shape)                          # (3, 4) — same shape as W
 
 # Question
-# Does it make sense if loss is a tensor, and we do loss.backward()? If so, what's the convention here? 
-# end of question 
+# Does it make sense if loss is a tensor, and we do loss.backward()? If so, what's the convention here?
+# end of question
+
+# Answer: backward() only works on a SCALAR tensor (a tensor with a single number,
+# shape []). If loss were a multi-element tensor like shape (4,), PyTorch wouldn't
+# know what to differentiate — backward() computes d(scalar)/d(params).
+#
+# The convention: always reduce your loss to a single number before calling
+# backward(). That's why we use:
+#   - F.cross_entropy(...) which returns a scalar (it averages over all elements)
+#   - Or .sum() / .mean() to reduce a tensor to a scalar
+#
+# In this example, loss = y.sum() collapses the (2,4) tensor into one number,
+# so loss.backward() is valid. If you accidentally called y.backward() on the
+# (2,4) tensor directly, you'd get:
+#   RuntimeError: grad can be implicitly created only for scalar outputs
 
 # --- Detaching from the graph ---
 # Sometimes you want to use a tensor's value without tracking gradients.
@@ -185,7 +223,27 @@ with torch.no_grad():
     z = x @ W              # no gradients computed — faster, less memory
     # Used during inference / evaluation
 
-# Question: once detached, what happens to previous tracking? Is there any situation where we detach and need to re-attach? 
+# Question: once detached, what happens to previous tracking? Is there any situation where we detach and need to re-attach?
+
+# Answer: detach() creates a NEW tensor that shares the same data but is
+# disconnected from the computation graph. The ORIGINAL tensor (y) is unchanged
+# — it still has its grad_fn and is still part of the graph.
+#
+# Think of it like this: the graph is a chain of operations leading to y.
+# z = y.detach() gives you a snapshot of y's values with the chain cut off.
+# y itself still has the chain attached.
+#
+# Re-attaching: there's no "re-attach" operation. Once detached, z is just raw
+# data. But you CAN feed z into new operations that DO track gradients:
+#   z = y.detach()
+#   w = z * 2  # w has no grad_fn — z was detached, so this chain starts cold
+#   # But:
+#   z.requires_grad_(True)  # manually turn tracking back on
+#   w = z * 2               # now w.grad_fn exists, tracking from z onward
+#
+# Real use case: in GANs or reinforcement learning, you detach the output of
+# one network so that gradients don't flow back through it when training
+# another network. You're saying "treat this value as a fixed constant."
 
 
 # ============================================================================
@@ -245,7 +303,21 @@ ln = nn.LayerNorm(64)
 x = torch.randn(2, 10, 64)
 y = ln(x)                    # (2, 10, 64) — each 64-dim vector is normalized
 
-#Question: why do we need to specify a 64 in nn.LayerNorm(64) if the goal is to normalize the last dimension of x = torch.randn(2, 10, 64)? Can we do nn.LayerNorm(128) instead? 
+#Question: why do we need to specify a 64 in nn.LayerNorm(64) if the goal is to normalize the last dimension of x = torch.randn(2, 10, 64)? Can we do nn.LayerNorm(128) instead?
+
+# Answer: LayerNorm needs the size because it has LEARNABLE parameters — gamma
+# (scale) and beta (shift), each of shape (64,). One gamma and one beta per
+# feature. After normalizing to mean=0, std=1, it does: output = gamma * normalized + beta.
+# These let the network learn to undo the normalization if that's useful.
+#
+# If you used nn.LayerNorm(128) with a (2, 10, 64) input, it would crash:
+#   RuntimeError: input shape [64] doesn't match normalized_shape [128]
+# PyTorch checks that the last dimension(s) of the input match normalized_shape.
+#
+# You can also normalize over multiple trailing dims: nn.LayerNorm([10, 64])
+# would normalize over the last TWO dimensions together. But in transformers,
+# we always use LayerNorm(d_model) to normalize each token's feature vector
+# independently.
 
 # --- nn.Dropout(p) ---
 # During training, randomly zeroes elements with probability p.
@@ -255,6 +327,23 @@ x = torch.randn(2, 10, 64)
 y = drop(x)                  # ~10% of values are 0, rest scaled up by 1/(1-p
 
 # Question: explain why 1/(1-p) here, maybe explain from a 'keep some quantity unbiased' kind of way?
+
+# Answer: Say you have a layer that outputs values summing to ~100 on average.
+# With p=0.1, dropout zeroes out ~10% of them. Now the sum is only ~90.
+# The next layer was trained expecting ~100, so it gets a weaker signal.
+#
+# Scaling by 1/(1-p) = 1/0.9 ≈ 1.11 compensates: the surviving 90% of values
+# each get multiplied by 1.11, so 90 * 1.11 ≈ 100. The expected value is
+# preserved — this is called "inverted dropout."
+#
+# Formally: for each element x_i, dropout outputs:
+#   x_i * mask_i / (1-p)   where mask_i is 1 with prob (1-p), 0 with prob p
+#   E[output_i] = x_i * (1-p) / (1-p) = x_i  ← unbiased!
+#
+# The big benefit: at eval time (model.eval()), dropout is completely turned off
+# and you don't need any correction factor. The model just runs normally.
+# Without the 1/(1-p) scaling during training, you'd need to scale DOWN by
+# (1-p) at eval time instead, which is messier.
 
 # --- nn.GELU() ---
 # Activation function used in GPT (smoother than ReLU).
@@ -307,7 +396,24 @@ for epoch in range(10):
         loss = F.cross_entropy(logits.view(-1, 100), targets.view(-1))
 
         #Question
-        # explain how does loss = F.cross_entropy(logits.view(-1, 100), targets.view(-1)) work exactly, is there any broadcasting here? 
+        # explain how does loss = F.cross_entropy(logits.view(-1, 100), targets.view(-1)) work exactly, is there any broadcasting here?
+
+        # Answer: No broadcasting here — it's a straightforward reshape + loss computation.
+        #
+        # Step by step:
+        #   1. logits has shape (4, 16, 100) — for each of 4 batches, 16 positions,
+        #      100 scores (one per vocab word).
+        #   2. logits.view(-1, 100) reshapes to (64, 100) — flatten batch and seq_len
+        #      into one dimension. Now it's 64 "predictions", each with 100 class scores.
+        #   3. targets has shape (4, 16). targets.view(-1) reshapes to (64,) — 64 integers,
+        #      each is the correct class index (0-99).
+        #   4. F.cross_entropy takes (N, C) logits and (N,) targets:
+        #      - For each of the 64 positions, it applies softmax to the 100 scores
+        #      - Then computes -log(probability of the correct class)
+        #      - Returns the MEAN of all 64 losses → a single scalar
+        #
+        # We flatten because cross_entropy only accepts 2D logits. It doesn't know
+        # about "batch" or "sequence" — it just sees N independent predictions.
 
         loss.backward()
         # Gradient clipping — prevents exploding gradients
@@ -437,6 +543,22 @@ dots = torch.einsum('ij,ij->i', a, b)    # (3,) — row-wise dot products
 
 # Question: what does it mean keeps the computation graph alive exactly
 
+# Answer: When you compute loss = model(x) → ... → F.cross_entropy(...), PyTorch
+# builds a graph of every operation that led to `loss`. This graph stores
+# references to all intermediate tensors (activations, weight matrices, etc.)
+# so that backward() can compute gradients through them.
+#
+# If you store the loss TENSOR (not the number) in a list:
+#   all_losses.append(loss)      # BAD — keeps the tensor object alive
+# Python's garbage collector sees that `loss` is still referenced, so it can't
+# free the computation graph. Every intermediate tensor from that forward pass
+# stays in memory. Do this for 1000 batches and you've leaked 1000 full graphs.
+#
+# loss.item() extracts just the float (e.g., 2.34) — a plain Python number with
+# no connection to the graph. The tensor can then be garbage collected, and the
+# entire computation graph gets freed.
+#   all_losses.append(loss.item())  # GOOD — just a number, graph is freed
+
 # 4. model.train() vs model.eval()
 #    Dropout and batch norm behave differently during training vs eval.
 #    Always call model.eval() before inference, model.train() before training.
@@ -449,7 +571,24 @@ dots = torch.einsum('ij,ij->i', a, b)    # (3,) — row-wise dot products
 #    F.cross_entropy expects (N, C) logits and (N,) targets.
 #    For language modeling: logits.view(-1, vocab_size), targets.view(-1)
 
-# Question: explain this part a bit more 
+# Question: explain this part a bit more
+
+# Answer: Your model outputs logits of shape (batch, seq_len, vocab_size),
+# e.g. (4, 16, 50000). That's a 3D tensor. But F.cross_entropy expects:
+#   - logits: (N, C) — N samples, C classes
+#   - targets: (N,)  — N integers, each in [0, C)
+#
+# So you need to collapse the batch and seq_len dims into one:
+#   logits.view(-1, vocab_size)  → (4*16, 50000) = (64, 50000)
+#   targets.view(-1)             → (64,)
+#
+# Now each of the 64 positions is treated as an independent classification
+# problem: "given these 50000 scores, the correct answer is targets[i]."
+#
+# Common bug: getting the order wrong. If you accidentally do
+#   logits.view(-1, seq_len)  ← WRONG — C should be vocab_size, not seq_len
+# the shapes might happen to work but the loss will be meaningless because
+# you're treating sequence positions as classes.
 
 
 # ============================================================================
@@ -457,13 +596,42 @@ dots = torch.einsum('ij,ij->i', a, b)    # (3,) — row-wise dot products
 # ============================================================================
 # Before moving on, make sure you can answer these without looking above:
 #
-# 1. What's the difference between view() and reshape()? view() does not make copy, and requires contiguous memory. 
-# 2. What does requires_grad=True do?  track the gradient of this tensor 
-# 3. Why do we call optimizer.zero_grad()? clear previous computed gradient so we can train next batch 
-# 4. What does torch.tril() produce and why does GPT need it?  so that each token only attend itself or previous tokens 
-# 5. What's the training loop order? (forward → ? → ? → ? → ?)  forward -> loss -> gradient -> update 
+# 1. What's the difference between view() and reshape()? view() does not make copy, and requires contiguous memory.
+#    Review: ✓ Correct. You could add: reshape() may copy if needed, and view() is preferred in LLM code because it's zero-cost.
+#
+# 2. What does requires_grad=True do?  track the gradient of this tensor
+#    Review: ✓ Good enough. More precisely: it tells PyTorch to record all operations on this tensor
+#    in a computation graph, so that when you call .backward(), it can compute d(loss)/d(this_tensor)
+#    and store the result in .grad.
+#
+# 3. Why do we call optimizer.zero_grad()? clear previous computed gradient so we can train next batch
+#    Review: ✓ Correct. Key detail: gradients accumulate by default (they ADD, not replace),
+#    so without zeroing you'd be updating weights based on the sum of all past batches' gradients.
+#
+# 4. What does torch.tril() produce and why does GPT need it?  so that each token only attend itself or previous tokens
+#    Review: ✓ Right idea. Be more specific: tril() produces a lower-triangular matrix of ones.
+#    We use it to mask attention scores — the upper triangle gets filled with -inf, which becomes
+#    0 after softmax, preventing tokens from "seeing the future."
+#
+# 5. What's the training loop order? (forward → ? → ? → ? → ?)  forward -> loss -> gradient -> update
+#    Review: ✓ Close! The full sequence with function names is:
+#    forward (logits = model(x)) → loss (F.cross_entropy) → backward (loss.backward()) →
+#    clip (clip_grad_norm_) → step (optimizer.step()) → zero_grad (optimizer.zero_grad())
+#    You're missing the clip and zero_grad steps, but the core idea is right.
+#
 # 6. What does nn.Embedding actually do under the hood? use the key (a tensor) to hash the embedding tensor
-# 7. Why do we use .item() when logging the loss? otherwise the computation graph will be alive, and will be memory leakage 
-# 8. What happens if your model is on GPU but your input tensor is on CPU? it will crash 
+#    Review: ✗ Not quite — there's no hashing. It's a simple TABLE LOOKUP (array indexing).
+#    nn.Embedding stores a weight matrix of shape (vocab_size, d_model). When you pass in
+#    token_ids like [5, 10, 23], it literally does: weight[token_ids], which returns rows
+#    5, 10, and 23. It's just fancy indexing — same as a Python list lookup, no hash function.
+#
+# 7. Why do we use .item() when logging the loss? otherwise the computation graph will be alive, and will be memory leakage
+#    Review: ✓ Correct! Storing the tensor keeps a reference to the entire computation graph
+#    in memory. .item() extracts a plain Python float, allowing the graph to be garbage collected.
+#
+# 8. What happens if your model is on GPU but your input tensor is on CPU? it will crash
+#    Review: ✓ Correct. Specifically you get:
+#    RuntimeError: Expected all tensors to be on the same device
+#    Fix: input_ids = input_ids.to(device) before passing to model.
 #
 # When you're ready, tell me and I'll quiz you.
