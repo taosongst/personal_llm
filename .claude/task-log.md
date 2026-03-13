@@ -12,3 +12,4 @@
 - Goal: Deep understanding of transformer architecture before implementing
 - Created phase1/questions.md — 20 questions covering embeddings, attention, multi-head, masking, MLP, LayerNorm, residuals, and full architecture
 - Created phase1/attention-paper-summary.md — thorough section-by-section summary of "Attention Is All You Need" with ~40 guiding questions
+- Created phase1/concept-notes.md — documented Q&A discussions: encoder vs decoder, causal masking, dimensionality flow, positional encoding intuition, RoPE & ALiBi
