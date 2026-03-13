@@ -14,3 +14,8 @@
 - Created phase1/attention-paper-summary.md — thorough section-by-section summary of "Attention Is All You Need" with ~40 guiding questions
 - Created phase1/concept-notes.md — documented Q&A discussions: encoder vs decoder, causal masking, dimensionality flow, positional encoding intuition, RoPE & ALiBi
 - Reviewed phase1/questions.md answers: 8 solid, 6 need depth, 6 wrong/significantly off. Key issues: Q/K swapped (Q4), multi-head reshape (Q8), W_O purpose (Q9), GELU description (Q13), incomplete block flow (Q17), wrong autoregressive reasoning (Q20)
+## Phase 2: Build a Tiny GPT
+- Goal: Implement a tiny GPT from scratch and train on Shakespeare
+- Downloaded Shakespeare dataset (~1MB) to phase2/data/input.txt
+- Created phase2/train_gpt.py guided skeleton — 6 steps with TODOs, shape comments, and verification checks
+- Config: 4 layers, 4 heads, 128 dims, ~800K params, char-level tokenizer
