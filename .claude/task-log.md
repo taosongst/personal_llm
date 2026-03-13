@@ -13,3 +13,4 @@
 - Created phase1/questions.md — 20 questions covering embeddings, attention, multi-head, masking, MLP, LayerNorm, residuals, and full architecture
 - Created phase1/attention-paper-summary.md — thorough section-by-section summary of "Attention Is All You Need" with ~40 guiding questions
 - Created phase1/concept-notes.md — documented Q&A discussions: encoder vs decoder, causal masking, dimensionality flow, positional encoding intuition, RoPE & ALiBi
+- Reviewed phase1/questions.md answers: 8 solid, 6 need depth, 6 wrong/significantly off. Key issues: Q/K swapped (Q4), multi-head reshape (Q8), W_O purpose (Q9), GELU description (Q13), incomplete block flow (Q17), wrong autoregressive reasoning (Q20)
